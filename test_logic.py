@@ -1548,6 +1548,29 @@ finally:
     webapp.config["speakers"].pop(uid_d, None)
 print("  OK")
 
+print("[test] watchdog: a dropout right after a (re)start is recovered on the next tick...")
+uid_g = "RINCON_GGGG0007"
+zg = FakeZone(uid_g, f"{base}/stream/{uid_g}.wav", "STOPPED")
+mgr4 = sonos_ctl.SpeakerManager()
+mgr4.speakers[uid_g] = zg
+mgr4._boot_started.add(uid_g)
+mgr4._last_auto_restart[uid_g] = time.monotonic() - 12  # resynced 12s ago
+webapp.config["speakers"][uid_g] = {"enabled": True, "volume": 50}
+try:
+    mgr4.watchdog_tick(base)
+    assert zg.play_count == 1, "a stream that dropped soon after a resync must restart now, not ~45s later"
+    zg._state = "STOPPED"
+    mgr4.watchdog_tick(base)
+    assert zg.play_count == 1, "a second stop within 45s is still throttled (someone pressed stop)"
+    zg._state = "TRANSITIONING"
+    mgr4._last_drop_restart[uid_g] -= 60
+    mgr4._last_auto_restart[uid_g] = time.monotonic()
+    mgr4.watchdog_tick(base)
+    assert zg.play_count == 1, "a speaker still connecting (TRANSITIONING) must be left alone"
+finally:
+    webapp.config["speakers"].pop(uid_g, None)
+print("  OK")
+
 print("[test] reconnect_all_streaming: only touches speakers actually streaming ours...")
 uid_e = "RINCON_EEEE0005"
 ze = FakeZone(uid_e, f"{base}/stream/{uid_e}.wav", "PLAYING")
@@ -1742,6 +1765,26 @@ finally:
 _page = client.get("/").data.decode("utf-8")
 assert 'id="updateNotes"' in _page and "function renderNotes" in _page and "function addInline" in _page
 print("  release notes are captured from the one request, capped, and served to the dashboard OK")
+
+# Updates come from this fork's own repo, and "Install update" refuses any
+# installer that isn't on that repo's Releases.
+assert updater._GITHUB_API_URL == "https://api.github.com/repos/Stonez14/Sonos1/releases/latest"
+_real_platform = sys.platform
+try:
+    sys.platform = "win32"
+    for _url, _why in [("https://example.invalid/PC2Sonos-Setup.exe", "foreign host"),
+                       ("https://github.com/Austinshu/PC2Sonos/releases/download/v9/PC2Sonos-Setup.exe", "other repo"),
+                       (updater.RELEASE_DOWNLOAD_PREFIX + "v9/evil.exe", "wrong file")]:
+        with updater._lock:
+            updater._status.update(checked=True, update_available=True, latest_version="v9", download_url=_url)
+        _r = client.post("/api/update/install")
+        assert _r.status_code == 400 and "no installable update" in _r.get_json()["error"], _why
+finally:
+    sys.platform = _real_platform
+    with updater._lock:
+        updater._status.update(checked=False, update_available=False, latest_version=None, download_url=None)
+assert 'function installUpdate' in client.get("/").data.decode("utf-8")
+print("  update check points at Stonez14/Sonos1; installer URLs from anywhere else refused OK")
 
 print("[test] diagnostics module...")
 import diagnostics  # noqa: E402

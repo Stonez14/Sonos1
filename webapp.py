@@ -429,7 +429,7 @@ DASHBOARD_HTML = """
 <div class="card" id="updateBanner" style="display:none; background:#132a1c; border:1px solid #1f4d2e;">
   <div class="update-row">
     <span id="updateText" style="color:#ddd; font-size:13px;"></span>
-    <button onclick="downloadUpdate()">Download</button>
+    <button id="updateInstallBtn" onclick="installUpdate()">Install update</button>
   </div>
   <details class="update-notes" id="updateNotes" style="display:none;">
     <summary>What's new in <span id="updateNotesVersion"></span></summary>
@@ -602,7 +602,7 @@ DASHBOARD_HTML = """
   </div>
   <div style="color:#ccc; font-size:14px; margin:2px 0 14px 0;">Something not working right? Tell the developer what's happening and it gets sent straight to them, so they can help you.</div>
   <button class="btn-report" onclick="exportDiag()">Report a Problem</button>
-  <a class="btn-report-gh" href="https://github.com/Austinshu/PC2Sonos/issues/new" target="_blank" rel="noopener">Or report it publicly on GitHub</a>
+  <a class="btn-report-gh" href="https://github.com/Stonez14/Sonos1/issues/new" target="_blank" rel="noopener">Or report it publicly on GitHub</a>
   <div id="diagResult" style="margin-top:8px; font-size:12px; color:#888;"></div>
 </div>
 
@@ -1562,6 +1562,30 @@ async function checkUpdate(){
 function downloadUpdate(){
   if (_updateDownloadUrl) window.open(_updateDownloadUrl, '_blank');
 }
+// Downloads the new installer and runs it (one Windows admin prompt). The
+// installer closes this app, keeps all settings and starts the new version,
+// so this page simply stops responding for a moment and then comes back.
+async function installUpdate(){
+  const btn = document.getElementById('updateInstallBtn');
+  btn.disabled = true; btn.textContent = 'Downloading…';
+  try {
+    const res = await fetch('/api/update/install', {method:'POST'});
+    const r = await res.json();
+    if (!r.ok) throw new Error(r.error || 'failed');
+    btn.textContent = 'Installing — accept the Windows prompt';
+    document.getElementById('updateText').textContent =
+      'Installing the update. This page reconnects when the new version starts.';
+    const reload = setInterval(async () => {
+      try {
+        const s = await (await fetch('/api/update_status')).json();
+        if (s.current_version === r.version) { clearInterval(reload); location.reload(); }
+      } catch (e) { /* app restarting */ }
+    }, 3000);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Install update';
+    if (confirm("Couldn't install automatically (" + e.message + "). Download the installer instead?")) downloadUpdate();
+  }
+}
 async function loadLevel(){
   try {
     const res = await fetch('/api/level');
@@ -2224,6 +2248,43 @@ def api_update_status():
     # check that ran once at startup. Never triggers a new GitHub request.
     from updater import get_status
     return jsonify(get_status())
+
+
+@app.route("/api/update/install", methods=["POST"])
+def api_update_install():
+    """Downloads the latest PC2Sonos-Setup.exe from this app's own GitHub
+    Releases and runs it with --update (Windows only). The installer then
+    closes this app, installs over the existing copy in place, keeps all
+    settings and starts the new version. Only a URL on our own repo's
+    release downloads is ever fetched, whatever the cached status says."""
+    import os
+    import tempfile
+    import requests
+    from updater import get_status, RELEASE_DOWNLOAD_PREFIX
+    if sys.platform != "win32":
+        return jsonify({"ok": False, "error": "automatic install is Windows-only"}), 400
+    st = get_status()
+    url = st.get("download_url") or ""
+    if not (st.get("update_available") and url.startswith(RELEASE_DOWNLOAD_PREFIX)
+            and url.endswith("/PC2Sonos-Setup.exe")):
+        return jsonify({"ok": False, "error": "no installable update found"}), 400
+    try:
+        dest = os.path.join(tempfile.gettempdir(),
+                            f"PC2Sonos-Setup-{re.sub(r'[^0-9A-Za-z.]', '', st.get('latest_version') or 'new')}.exe")
+        with requests.get(url, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            with open(dest + ".part", "wb") as f:
+                for block in r.iter_content(1 << 16):
+                    f.write(block)
+        os.replace(dest + ".part", dest)
+        import ctypes
+        rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", dest, "--update", None, 1)
+        if rc <= 32:
+            return jsonify({"ok": False, "error": "the Windows admin prompt was declined"}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+    latest = (st.get("latest_version") or "").lstrip("vV")
+    return jsonify({"ok": True, "version": latest})
 
 
 @app.route("/api/render_device", methods=["POST"])

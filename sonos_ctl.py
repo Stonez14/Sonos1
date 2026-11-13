@@ -205,6 +205,7 @@ class SpeakerManager:
         # watchdog can't get into a rapid-fire restart fight with a user
         # who is deliberately stopping playback on the speaker itself
         self._last_auto_restart = {}
+        self._last_drop_restart = {}  # uid -> monotonic time of the last restart after a dropout
         # uid -> monotonic time of the last REAL dropout restart (state
         # went STOPPED/PAUSED unexpectedly) and a running count for this
         # session -- deliberately separate from _last_auto_restart, which
@@ -665,7 +666,18 @@ class SpeakerManager:
             elif ours:
                 self.streams[uid] = False
                 now = time.monotonic()
-                if now - self._last_auto_restart.get(uid, 0) >= 45:
+                if (state == "TRANSITIONING"
+                        and now - self._last_auto_restart.get(uid, 0) < 20):
+                    continue  # still connecting after a (re)start -- give it a moment
+                # The 45s throttle (so we don't fight someone pressing stop on
+                # the speaker) counts from the last DROPOUT restart only. It
+                # used to count from any (re)start, so a stream that dropped
+                # soon after boot or a periodic resync sat silent for up to
+                # ~50s before coming back. A 10s minimum after any start
+                # still stops back-to-back restarts.
+                if (now - self._last_drop_restart.get(uid, -1e9) >= 45
+                        and now - self._last_auto_restart.get(uid, 0) >= 10):
+                    self._last_drop_restart[uid] = now
                     self._last_auto_restart[uid] = now
                     self._last_dropout[uid] = now
                     self._dropout_count[uid] = self._dropout_count.get(uid, 0) + 1

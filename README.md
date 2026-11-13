@@ -1,4 +1,8 @@
-# PC2Sonos
+# PC2Sonos (Sonos1 fork)
+
+> This is Stonez14's copy of [PC2Sonos by Austinshu](https://github.com/Austinshu/PC2Sonos), with fixes for
+> Sonos audio cutting out on Wi-Fi. Updates are published on this repo's Releases and installed from the
+> dashboard's **Install update** button.
 
 <img alt="Windows" title="Windows 10 or newer" src="https://img.shields.io/badge/Windows-10%2B-0078D6?logo=windows&logoColor=white">
 <img alt="macOS" title="macOS 12.0 (Monterey) or newer" src="https://img.shields.io/badge/macOS-12.0%2B-000000?logo=apple&logoColor=white">

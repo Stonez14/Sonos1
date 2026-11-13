@@ -74,6 +74,18 @@ def default_install_dir():
     return Path(program_files) / APP_NAME
 
 
+def existing_install_dir():
+    """Where PC2Sonos is already installed (from its Settings > Apps entry),
+    or None. An update goes back to the same place without asking."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, UNINSTALL_KEY) as key:
+            loc, _ = winreg.QueryValueEx(key, "InstallLocation")
+        p = Path(loc)
+        return p if (p / f"{APP_NAME}.exe").exists() else None
+    except Exception:
+        return None
+
+
 def prompt_install_dir():
     """Asks where to put the app binaries, defaulting to Program Files.
     Falls back to the default silently if a folder picker can't be shown
@@ -348,7 +360,15 @@ def main():
         input("Press Enter to exit...")
         return 1
 
-    install_dir = prompt_install_dir()
+    # --update: started by the dashboard's "Install update" button. Same
+    # install, but no questions and the window closes by itself at the end.
+    updating = "--update" in sys.argv[1:]
+    existing = existing_install_dir()
+    if existing:
+        say(f"Updating the existing install (settings are kept).")
+        install_dir = existing
+    else:
+        install_dir = prompt_install_dir()
 
     say("[1/7] Installing app files...")
     say(f"  installing to {install_dir}")
@@ -384,7 +404,11 @@ def main():
     # on every launch, not just this first one. Doing it here too would
     # just open two browser tabs to the same page.
     say("")
-    input("Press Enter to close this window...")
+    if updating:
+        say("Update complete. This window closes in a few seconds.")
+        time.sleep(4)
+    else:
+        input("Press Enter to close this window...")
     return 0
 
 

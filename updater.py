@@ -14,7 +14,11 @@ import requests
 
 from version import VERSION
 
-_GITHUB_API_URL = "https://api.github.com/repos/Austinshu/PC2Sonos/releases/latest"
+REPO = "Stonez14/Sonos1"
+_GITHUB_API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
+# Only installers published on this repo's own Releases may be installed by
+# the dashboard's "Install update" button (see webapp.api_update_install).
+RELEASE_DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"
 # The release asset that matches this platform: the Windows installer,
 # or on macOS the .dmg for this CPU architecture (see build_macos_app.sh).
 if sys.platform == "darwin":
