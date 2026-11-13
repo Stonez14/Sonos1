@@ -1851,6 +1851,39 @@ finally:
     webapp.config["channels"] = _ch
 print("  reduced bandwidth streams mono at the normal rate OK")
 
+# A Wi-Fi stall makes the queue back up for a moment and then drain once TCP
+# catches up. Sonos's own buffer covers that, so none of it may be thrown
+# away (the old 200ms trim cut the audio on every stall). A backlog that
+# never drains is real drift and still gets trimmed.
+import numpy as _np_st
+_gen = webapp.app.view_functions["stream_wav"]("stall-test").response
+next(_gen)  # header
+_chunk_bytes = webapp.CHUNK * webapp.config["channels"] * 2
+_mk = lambda i: _np_st.full(_chunk_bytes // 2, i, dtype=_np_st.int16).tobytes()
+threading.Timer(0.1, lambda: [webapp.broadcaster.publish(_mk(i)) for i in range(1, 31)]).start()
+_got = [int(_np_st.frombuffer(next(_gen), dtype=_np_st.int16)[0]) for _ in range(30)]
+assert _got == list(range(1, 31)), f"a ~700ms burst must reach Sonos intact, got {_got}"
+print("  ~700ms Wi-Fi stall burst delivered with nothing dropped OK")
+# now a standing backlog: keep ~20 chunks (~460ms) queued for a few seconds
+_seq = [100]
+def _feed():
+    for _ in range(20):
+        _seq[0] += 1; webapp.broadcaster.publish(_mk(_seq[0]))
+_feed()
+_t_end = time.monotonic() + 5.0  # up to two 2s guard windows
+_skipped = False
+_last = 100
+while time.monotonic() < _t_end:
+    _v = int(_np_st.frombuffer(next(_gen), dtype=_np_st.int16)[0])
+    if _v > _last + 1:
+        _skipped = True; break
+    _last = _v
+    _seq[0] += 1; webapp.broadcaster.publish(_mk(_seq[0]))  # one in, one out: never drains
+    time.sleep(0.02)
+assert _skipped, "a backlog that never drains must still be trimmed back to near real time"
+_gen.close()
+print("  standing backlog still trimmed OK")
+
 print("[test] donation prompt: once-a-week throttling and permanent opt-out...")
 webapp.config["donated"] = False
 webapp.config["last_donate_prompt_at"] = 0

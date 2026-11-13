@@ -38,6 +38,20 @@ soco_config.REQUEST_TIMEOUT = 4.0
 RESYNC_INTERVAL_SECONDS = 10 * 60
 
 
+def _resync_interval_seconds():
+    """The periodic reconnect interval, overridable in config.json with
+    "sonos_resync_minutes" (0 turns the periodic reconnect off). Each
+    reconnect is a ~1s gap in the audio, so someone hearing a short cut
+    every 10 minutes can raise or disable it."""
+    try:
+        minutes = config.get("sonos_resync_minutes")
+        if minutes is None:
+            return RESYNC_INTERVAL_SECONDS
+        return max(0, float(minutes)) * 60
+    except (TypeError, ValueError):
+        return RESYNC_INTERVAL_SECONDS
+
+
 def _track_metadata(title):
     """DIDL-Lite metadata for our stream, built explicitly instead of
     relying on SoCo's play_uri(title=...) shortcut.
@@ -642,7 +656,8 @@ class SpeakerManager:
             if ours and state == "PLAYING":
                 self.streams[uid] = True
                 now = time.monotonic()
-                if now - self._last_auto_restart.get(uid, 0) >= RESYNC_INTERVAL_SECONDS:
+                resync_s = _resync_interval_seconds()
+                if resync_s and now - self._last_auto_restart.get(uid, 0) >= resync_s:
                     print(f"[sonos] watchdog: periodic resync for {zone.player_name} "
                           f"(reconnecting to reset any Sonos-side sync drift "
                           f"from the long-running connection)")

@@ -16,7 +16,7 @@ from werkzeug.utils import secure_filename
 from audio_engine import (CHUNK, broadcaster, list_output_devices, list_input_devices,
                           restart_render, restart_capture, get_current_render_device_names,
                           get_lan_ip, start_external_input, stop_external_input,
-                          get_external_input_status)
+                          get_external_input_status, _StandingBacklogGuard)
 from config import config, save_config, PASSWORD_PATH, APP_DIR
 from sonos_ctl import speaker_mgr
 from version import VERSION
@@ -2423,25 +2423,45 @@ def stream_wav(uid):
         # that, skip ahead to near "now" instead of dutifully draining it
         # in order.
         chunk_ms = CHUNK / config["sample_rate"] * 1000
-        max_backlog_chunks = max(1, int(200 / chunk_ms))
+        # Only throw audio away when the backlog is STANDING, not when it's
+        # a burst. Sonos keeps several seconds buffered, so a Wi-Fi stall of
+        # half a second or so (routine on a laptop: power saving, roaming,
+        # background scans) is absorbed by the speaker as long as we send it
+        # every byte once the link recovers -- TCP then catches up faster
+        # than real time and the queue drains by itself. The old rule
+        # (trim as soon as the queue held >200ms) turned every such stall
+        # into a permanent hole in the audio, i.e. an audible cut. Real
+        # drift (a queue that never drains) is still caught: if the queue
+        # hasn't dropped below ~250ms at any point in a 2s window, we skip
+        # ahead to near "now" just as before. A hard cap keeps a long
+        # stall from adding seconds of delay.
+        guard = _StandingBacklogGuard(
+            min_backlog=max(2, int(250 / chunk_ms)), window_s=2.0)
+        hard_cap_chunks = max(2, int(3000 / chunk_ms))
         trim_to_chunks = max(1, int(50 / chunk_ms))
         last_trim_log = 0.0
         try:
             while True:
                 chunk = q.get()
                 backlog = q.qsize()
-                if backlog > max_backlog_chunks:
+                standing = guard.check(backlog, time.monotonic())
+                if backlog > hard_cap_chunks:
+                    to_drop = backlog - trim_to_chunks
+                elif standing:
+                    to_drop = max(0, min(backlog, standing) - trim_to_chunks)
+                else:
+                    to_drop = 0
+                if to_drop:
                     dropped = 0
-                    for _ in range(backlog - trim_to_chunks):
+                    for _ in range(to_drop):
                         try:
                             chunk = q.get_nowait()
                             dropped += 1
                         except queue.Empty:
                             break
-                    # this IS an audible skip/glitch on the Sonos side --
-                    # was previously silent, so a real stutter left no
-                    # trace anywhere to diagnose it from. Throttled to
-                    # once per 5s so a bad stretch doesn't flood the log.
+                    # this IS an audible skip on the Sonos side, so log it
+                    # (throttled to once per 5s so a bad stretch doesn't
+                    # flood the log).
                     now = time.monotonic()
                     if dropped and now - last_trim_log > 5:
                         last_trim_log = now
